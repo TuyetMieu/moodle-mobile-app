@@ -61,6 +61,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var currentDestination by mutableStateOf(AppDestination.HOME)
     var selectedCourseId by mutableStateOf<String?>(null)
     private var tabBeforeCourse = AppDestination.COURSES
+    private val tabHistory = mutableListOf<AppDestination>()
 
     /**
      * Dialog đang mở: "" = không có. Các tên dùng trong app:
@@ -145,6 +146,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun onLoggedIn() {
+        tabHistory.clear()
         currentDestination = AppDestination.HOME
         isLoggedIn = true
         refresh(initial = true)
@@ -157,6 +159,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             data = null
             dialogName = ""
             selectedCourseId = null
+            tabHistory.clear()
             currentDestination = AppDestination.HOME
             isOffline = false
             loadError = null
@@ -299,8 +302,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // ---------------------------------------------------------- điều hướng
 
     fun navigateTo(destination: AppDestination) {
+        if (selectedCourseId == null && currentDestination != destination) {
+            tabHistory.remove(destination)
+            tabHistory.add(currentDestination)
+        }
         currentDestination = destination
         selectedCourseId = null
+    }
+
+    /** Quay lại màn hình trước đó (đóng môn học hoặc lùi về tab trước). */
+    fun navigateBack() {
+        if (selectedCourseId != null) {
+            selectCourse(null)
+            return
+        }
+        if (tabHistory.isNotEmpty()) {
+            currentDestination = tabHistory.removeAt(tabHistory.lastIndex)
+        } else {
+            currentDestination = AppDestination.HOME
+        }
     }
 
     /** Mở trang chi tiết môn học. Truyền null để đóng (quay về tab trước đó). */

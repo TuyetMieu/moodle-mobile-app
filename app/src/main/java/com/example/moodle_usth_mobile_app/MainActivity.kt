@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CloudOff
@@ -38,8 +39,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -117,10 +120,25 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun MoodleAppRoot(viewModel: MainViewModel) {
-    if (viewModel.isLoggedIn) {
-        SignedInApp(viewModel)
-    } else {
-        LoginScreen(viewModel)
+    // Khung tối đa 430dp căn giữa khi mở trên màn hình lớn (tablet/desktop), vừa khít 100% trên điện thoại.
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFFE2E8F0)),
+        contentAlignment = Alignment.TopCenter
+    ) {
+        Box(
+            modifier = Modifier
+                .widthIn(max = 430.dp)
+                .fillMaxSize()
+                .background(SurfaceLight)
+        ) {
+            if (viewModel.isLoggedIn) {
+                SignedInApp(viewModel)
+            } else {
+                LoginScreen(viewModel)
+            }
+        }
     }
 }
 
@@ -130,6 +148,7 @@ private fun SignedInApp(viewModel: MainViewModel) {
     val currentDestination = viewModel.currentDestination
     val selectedCourse = viewModel.selectedCourse
     val data = viewModel.data
+    val stateHolder = rememberSaveableStateHolder()
 
     // Mỗi khi ViewModel có thông báo mới → hiện snackbar, hiện xong thì xoá.
     val message = viewModel.message
@@ -140,10 +159,9 @@ private fun SignedInApp(viewModel: MainViewModel) {
         }
     }
 
-    // Back: đóng trang chi tiết môn học trước, rồi về Home.
-    BackHandler(enabled = selectedCourse != null) { viewModel.selectCourse(null) }
-    BackHandler(enabled = selectedCourse == null && currentDestination != AppDestination.HOME) {
-        viewModel.navigateTo(AppDestination.HOME)
+    // Back: đóng trang chi tiết môn học trước, rồi quay lại tab trước đó / Home.
+    BackHandler(enabled = selectedCourse != null || currentDestination != AppDestination.HOME) {
+        viewModel.navigateBack()
     }
 
     Scaffold(
@@ -164,7 +182,10 @@ private fun SignedInApp(viewModel: MainViewModel) {
             }
 
             val loadError = viewModel.loadError
-            if (data == null && loadError != null) {
+            if (data == null && currentDestination == AppDestination.TRACKER && selectedCourse == null) {
+                // Màn Tracker có giao diện Skeleton và Error riêng.
+                TrackerScreen(viewModel = viewModel)
+            } else if (data == null && loadError != null) {
                 // Chưa có dữ liệu và tải bị lỗi
                 ErrorState(
                     message = loadError,
@@ -180,15 +201,18 @@ private fun SignedInApp(viewModel: MainViewModel) {
                     onRefresh = { viewModel.refresh() },
                     modifier = Modifier.fillMaxSize()
                 ) {
-                    if (selectedCourse != null) {
-                        CourseDetailScreen(viewModel = viewModel)
-                    } else {
-                        when (currentDestination) {
-                            AppDestination.HOME -> HomeScreen(viewModel = viewModel)
-                            AppDestination.COURSES -> CoursesScreen(viewModel = viewModel)
-                            AppDestination.TIMETABLE -> TimetableScreen(viewModel = viewModel)
-                            AppDestination.TRACKER -> TrackerScreen(viewModel = viewModel)
-                            AppDestination.PROFILE -> ProfileScreen(viewModel = viewModel)
+                    val screenKey = if (selectedCourse != null) "course:${selectedCourse.id}" else "tab:${currentDestination.name}"
+                    stateHolder.SaveableStateProvider(screenKey) {
+                        if (selectedCourse != null) {
+                            CourseDetailScreen(viewModel = viewModel)
+                        } else {
+                            when (currentDestination) {
+                                AppDestination.HOME -> HomeScreen(viewModel = viewModel)
+                                AppDestination.COURSES -> CoursesScreen(viewModel = viewModel)
+                                AppDestination.TIMETABLE -> TimetableScreen(viewModel = viewModel)
+                                AppDestination.TRACKER -> TrackerScreen(viewModel = viewModel)
+                                AppDestination.PROFILE -> ProfileScreen(viewModel = viewModel)
+                            }
                         }
                     }
                 }
