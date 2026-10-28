@@ -210,7 +210,13 @@ fun TimetableScreen(
                     Column(Modifier.padding(16.dp)) {
                         Text(course.title, style = MaterialTheme.typography.titleMedium)
                         Text("${course.code} · ${course.credits} credits")
-                        Text("${course.done}/${course.total} assignments complete")
+                        val courseAssignments = data?.assignments.orEmpty()
+                            .filter { it.courseId == course.id }
+                        val completed = courseAssignments.count {
+                            com.example.test.data.repository.LearningRules.status(it, now) ==
+                                com.example.test.data.model.AssignmentStatus.DONE
+                        }
+                        Text("$completed/${courseAssignments.size} assignments complete")
                     }
                 }
             }

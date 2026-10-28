@@ -39,6 +39,7 @@ import com.example.test.BuildConfig
 import com.example.test.data.model.Assignment
 import com.example.test.data.model.AssignmentStatus
 import com.example.test.data.model.LearningData
+import com.example.test.data.repository.LearningRules
 import com.example.test.data.repository.MoodleRepository
 import com.example.test.data.remote.ApiException
 import kotlinx.coroutines.launch
@@ -125,7 +126,6 @@ fun MoodleApp(repository: MoodleRepository) {
                 snackbarHostState = snackbarHostState,
                 onRetry = ::refresh,
                 onDataChange = { data = it },
-                onShowClasswork = { showTimetable = false },
                 onShowTimetable = { showTimetable = true },
                 onLogout = logout
             )
@@ -186,7 +186,6 @@ private fun ClassworkScreen(
     snackbarHostState: SnackbarHostState,
     onRetry: () -> Unit,
     onDataChange: (LearningData) -> Unit,
-    onShowClasswork: () -> Unit,
     onShowTimetable: () -> Unit,
     onLogout: () -> Unit
 ) {
@@ -196,26 +195,38 @@ private fun ClassworkScreen(
     var selectedAssignmentId by rememberSaveable { mutableStateOf<String?>(null) }
     var savingAssignmentId by remember { mutableStateOf<String?>(null) }
     var actionMessage by remember { mutableStateOf<String?>(null) }
+    var now by remember { mutableStateOf(System.currentTimeMillis()) }
     val scope = rememberCoroutineScope()
+    LaunchedEffect(Unit) {
+        while (true) {
+            kotlinx.coroutines.delay(60_000)
+            now = System.currentTimeMillis()
+        }
+    }
     LaunchedEffect(actionMessage) {
         actionMessage?.let { snackbarHostState.showSnackbar(it) }
     }
 
-    val assignments = data?.assignments.orEmpty()
-        .filter { selectedCourse == "all" || it.courseId == selectedCourse }
-        .filter { it.title.contains(query.trim(), ignoreCase = true) }
-        .filter { assignment ->
-            when (filter) {
-                WorkFilter.TODO -> assignment.status != AssignmentStatus.DONE
-                WorkFilter.URGENT -> assignment.status == AssignmentStatus.URGENT ||
-                    assignment.status == AssignmentStatus.OVERDUE
-                WorkFilter.DONE -> assignment.status == AssignmentStatus.DONE
-            }
+    fun filteredAssignments(option: WorkFilter): List<Assignment> {
+        val result = LearningRules.filterAssignments(
+            assignments = data?.assignments.orEmpty(),
+            filter = when (option) {
+                WorkFilter.TODO -> null
+                WorkFilter.URGENT -> AssignmentStatus.URGENT
+                WorkFilter.DONE -> AssignmentStatus.DONE
+            },
+            courseId = selectedCourse.takeIf { it != "all" },
+            query = query,
+            now = now
+        )
+        return if (option == WorkFilter.TODO) {
+            result.filter { LearningRules.status(it, now) != AssignmentStatus.DONE }
+        } else {
+            result
         }
-        .let { list ->
-            if (filter == WorkFilter.DONE) list.sortedByDescending { it.completedAt }
-            else list.sortedBy { it.dueAt }
-        }
+    }
+
+    val assignments = filteredAssignments(filter)
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) }
@@ -262,7 +273,7 @@ private fun ClassworkScreen(
                         FilterChip(
                             selected = filter == option,
                             onClick = { filter = option },
-                            label = { Text("${option.label} (${data.assignments.count { matches(it, option) }})") }
+                            label = { Text("${option.label} (${filteredAssignments(option).size})") }
                         )
                     }
                 }
@@ -279,12 +290,17 @@ private fun ClassworkScreen(
                         )
                     }
                 }
+                Text(
+                    "${data.assignments.count { LearningRules.status(it, now) == AssignmentStatus.DONE }}/${data.assignments.size} assignments complete",
+                    style = MaterialTheme.typography.labelLarge,
+                    modifier = Modifier.padding(vertical = 8.dp)
+                )
                 LazyColumn(
                     modifier = Modifier.weight(1f),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     items(assignments, key = { it.id }) { assignment ->
-                        AssignmentCard(assignment, onClick = { selectedAssignmentId = assignment.id })
+                        AssignmentCard(assignment, now, onClick = { selectedAssignmentId = assignment.id })
                     }
                 }
                 if (error != null) {
@@ -324,7 +340,8 @@ private fun ClassworkScreen(
                         val markDone = !previous.completed
                         val optimistic = previous.copy(
                             completedAt = if (markDone) System.currentTimeMillis() else null,
-                            status = if (markDone) AssignmentStatus.DONE else statusAt(previous.dueAt)
+                            status = if (markDone) AssignmentStatus.DONE
+                            else LearningRules.status(previous.dueAt, null, now)
                         )
                         onDataChange(
                             currentData.copy(
@@ -377,28 +394,13 @@ private fun ClassworkScreen(
     }
 }
 
-private fun statusAt(dueAt: Long, now: Long = System.currentTimeMillis()): AssignmentStatus =
-    when {
-        dueAt <= now -> AssignmentStatus.OVERDUE
-        dueAt - now <= 24 * 60 * 60 * 1000L -> AssignmentStatus.URGENT
-        else -> AssignmentStatus.UPCOMING
-    }
-
-private fun matches(assignment: Assignment, filter: WorkFilter): Boolean =
-    when (filter) {
-        WorkFilter.TODO -> assignment.status != AssignmentStatus.DONE
-        WorkFilter.URGENT -> assignment.status == AssignmentStatus.URGENT ||
-            assignment.status == AssignmentStatus.OVERDUE
-        WorkFilter.DONE -> assignment.status == AssignmentStatus.DONE
-    }
-
 @Composable
-private fun AssignmentCard(assignment: Assignment, onClick: () -> Unit) {
+private fun AssignmentCard(assignment: Assignment, now: Long, onClick: () -> Unit) {
     Card(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp)) {
             Text(assignment.title, style = MaterialTheme.typography.titleMedium)
             Text(assignment.courseShortTitle, style = MaterialTheme.typography.bodyMedium)
-            Text("${assignment.status} · ${DateFormat.getDateTimeInstance().format(Date(assignment.dueAt))}")
+            Text("${LearningRules.status(assignment, now)} · ${DateFormat.getDateTimeInstance().format(Date(assignment.dueAt))}")
             assignment.contribution?.let { Text("Contributes ${"%.1f".format(it)}% to course grade") }
         }
     }

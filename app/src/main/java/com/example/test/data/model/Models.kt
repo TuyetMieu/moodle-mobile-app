@@ -36,7 +36,7 @@ data class Course(
     val total: Int
 ) {
     val progress: Int
-        get() = if (total == 0) 0 else done * 100 / total
+        get() = if (total <= 0) 0 else done.coerceIn(0, total) * 100 / total
 }
 
 data class ClassSession(

@@ -13,5 +13,5 @@ Install JDK 17+ and Android SDK, then run:
 .\gradlew.bat :app:assembleDebug
 ```
 
-The project is being tracked in a local Git repository. Add a remote before pushing
-milestone commits.
+Milestone commits are pushed individually to `https://github.com/namdzzgg-hash/test.git`
+on the `main` branch.
