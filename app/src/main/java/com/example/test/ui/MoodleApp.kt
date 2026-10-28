@@ -15,11 +15,13 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -91,6 +93,7 @@ fun MoodleApp(repository: MoodleRepository) {
             loading = loading,
             error = error,
             onRetry = ::refresh,
+            onDataChange = { data = it },
             onLogout = {
                 repository.logout()
                 data = null
@@ -150,11 +153,16 @@ private fun ClassworkScreen(
     loading: Boolean,
     error: String?,
     onRetry: () -> Unit,
+    onDataChange: (LearningData) -> Unit,
     onLogout: () -> Unit
 ) {
     var filter by rememberSaveable { mutableStateOf(WorkFilter.TODO) }
     var selectedCourse by rememberSaveable { mutableStateOf("all") }
     var query by rememberSaveable { mutableStateOf("") }
+    var selectedAssignmentId by rememberSaveable { mutableStateOf<String?>(null) }
+    var savingAssignmentId by remember { mutableStateOf<String?>(null) }
+    var actionMessage by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
 
     val assignments = data?.assignments.orEmpty()
         .filter { selectedCourse == "all" || it.courseId == selectedCourse }
@@ -227,9 +235,10 @@ private fun ClassworkScreen(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     items(assignments, key = { it.id }) { assignment ->
-                        AssignmentCard(assignment, onClick = {})
+                        AssignmentCard(assignment, onClick = { selectedAssignmentId = assignment.id })
                     }
                 }
+                actionMessage?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                 if (error != null) {
                     Text(error, color = MaterialTheme.colorScheme.error)
                     Button(onClick = onRetry, enabled = !loading) { Text("Retry") }
@@ -237,7 +246,95 @@ private fun ClassworkScreen(
             }
         }
     }
+
+    val selectedAssignment = data?.assignments?.firstOrNull { it.id == selectedAssignmentId }
+    if (selectedAssignment != null) {
+        AlertDialog(
+            onDismissRequest = { selectedAssignmentId = null },
+            title = { Text(selectedAssignment.title) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(selectedAssignment.courseTitle)
+                    Text(selectedAssignment.description.ifBlank { "No description provided." })
+                    Text("Status: ${selectedAssignment.status}")
+                    Text("Due: ${DateFormat.getDateTimeInstance().format(Date(selectedAssignment.dueAt))}")
+                    selectedAssignment.contribution?.let {
+                        Text("How this task counts: ${"%.1f".format(it)}% of the course grade")
+                    }
+                    selectedAssignment.score?.let {
+                        Text("Grade: ${"%.1f".format(it)} / ${"%.1f".format(selectedAssignment.maxScore)}")
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = savingAssignmentId == null &&
+                        !(selectedAssignment.completed && selectedAssignment.score != null),
+                    onClick = {
+                        val currentData = data ?: return@TextButton
+                        val previous = selectedAssignment
+                        val markDone = !previous.completed
+                        val optimistic = previous.copy(
+                            completedAt = if (markDone) System.currentTimeMillis() else null,
+                            status = if (markDone) AssignmentStatus.DONE else statusAt(previous.dueAt)
+                        )
+                        onDataChange(
+                            currentData.copy(
+                                assignments = currentData.assignments.map {
+                                    if (it.id == previous.id) optimistic else it
+                                }
+                            )
+                        )
+                        savingAssignmentId = previous.id
+                        actionMessage = null
+                        scope.launch {
+                            try {
+                                val serverAssignment = repository.setCompleted(previous.id, markDone)
+                                val latest = data
+                                if (latest != null) {
+                                    onDataChange(
+                                        latest.copy(
+                                            assignments = latest.assignments.map {
+                                                if (it.id == serverAssignment.id) serverAssignment else it
+                                            }
+                                        )
+                                    )
+                                }
+                                actionMessage = if (markDone) "Assignment marked as done." else "Completion undone."
+                            } catch (failure: Exception) {
+                                val latest = data
+                                if (latest != null) {
+                                    onDataChange(
+                                        latest.copy(
+                                            assignments = latest.assignments.map {
+                                                if (it.id == previous.id) previous else it
+                                            }
+                                        )
+                                    )
+                                }
+                                actionMessage = failure.message ?: "Could not update assignment."
+                            } finally {
+                                savingAssignmentId = null
+                            }
+                        }
+                    }
+                ) {
+                    Text(if (savingAssignmentId != null) "Saving..." else if (selectedAssignment.completed) "Undo done" else "Mark as done")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { selectedAssignmentId = null }) { Text("Close") }
+            }
+        )
+    }
 }
+
+private fun statusAt(dueAt: Long, now: Long = System.currentTimeMillis()): AssignmentStatus =
+    when {
+        dueAt <= now -> AssignmentStatus.OVERDUE
+        dueAt - now <= 24 * 60 * 60 * 1000L -> AssignmentStatus.URGENT
+        else -> AssignmentStatus.UPCOMING
+    }
 
 private fun matches(assignment: Assignment, filter: WorkFilter): Boolean =
     when (filter) {
