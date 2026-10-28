@@ -16,6 +16,8 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -38,6 +40,7 @@ import com.example.test.data.model.Assignment
 import com.example.test.data.model.AssignmentStatus
 import com.example.test.data.model.LearningData
 import com.example.test.data.repository.MoodleRepository
+import com.example.test.data.remote.ApiException
 import kotlinx.coroutines.launch
 import java.text.DateFormat
 import java.util.Date
@@ -49,6 +52,8 @@ fun MoodleApp(repository: MoodleRepository) {
     var data by remember { mutableStateOf<LearningData?>(null) }
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    var offline by remember { mutableStateOf(false) }
+    val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
 
     fun refresh() {
@@ -57,8 +62,14 @@ fun MoodleApp(repository: MoodleRepository) {
             error = null
             try {
                 data = repository.load()
+                offline = repository.isOffline
             } catch (failure: Exception) {
+                if (failure is ApiException && failure.status == 401) {
+                    repository.logout()
+                    signedIn = false
+                }
                 error = failure.message ?: "Could not load data from the server."
+                offline = false
             } finally {
                 loading = false
             }
@@ -98,6 +109,10 @@ fun MoodleApp(repository: MoodleRepository) {
             TimetableScreen(
                 data = data,
                 loading = loading,
+                offline = offline,
+                error = error,
+                snackbarHostState = snackbarHostState,
+                onRetry = ::refresh,
                 onShowClasswork = { showTimetable = false },
                 onLogout = logout
             )
@@ -105,7 +120,9 @@ fun MoodleApp(repository: MoodleRepository) {
             ClassworkScreen(
                 data = data,
                 loading = loading,
+                offline = offline,
                 error = error,
+                snackbarHostState = snackbarHostState,
                 onRetry = ::refresh,
                 onDataChange = { data = it },
                 onShowClasswork = { showTimetable = false },
@@ -164,7 +181,9 @@ private enum class WorkFilter(val label: String) {
 private fun ClassworkScreen(
     data: LearningData?,
     loading: Boolean,
+    offline: Boolean,
     error: String?,
+    snackbarHostState: SnackbarHostState,
     onRetry: () -> Unit,
     onDataChange: (LearningData) -> Unit,
     onShowClasswork: () -> Unit,
@@ -178,6 +197,9 @@ private fun ClassworkScreen(
     var savingAssignmentId by remember { mutableStateOf<String?>(null) }
     var actionMessage by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
+    LaunchedEffect(actionMessage) {
+        actionMessage?.let { snackbarHostState.showSnackbar(it) }
+    }
 
     val assignments = data?.assignments.orEmpty()
         .filter { selectedCourse == "all" || it.courseId == selectedCourse }
@@ -195,7 +217,9 @@ private fun ClassworkScreen(
             else list.sortedBy { it.dueAt }
         }
 
-    Scaffold { padding ->
+    Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) }
+    ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
@@ -214,6 +238,15 @@ private fun ClassworkScreen(
                 Text(error ?: "No data loaded")
                 Button(onClick = onRetry, enabled = !loading) { Text("Retry") }
             } else {
+                if (offline) {
+                    Text(
+                        "Offline · showing saved data",
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.padding(vertical = 8.dp)
+                    )
+                    Button(onClick = onRetry, enabled = !loading) { Text("Retry connection") }
+                }
+                if (loading && data != null) Text("Refreshing…")
                 OutlinedTextField(
                     value = query,
                     onValueChange = { query = it },
@@ -254,7 +287,6 @@ private fun ClassworkScreen(
                         AssignmentCard(assignment, onClick = { selectedAssignmentId = assignment.id })
                     }
                 }
-                actionMessage?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                 if (error != null) {
                     Text(error, color = MaterialTheme.colorScheme.error)
                     Button(onClick = onRetry, enabled = !loading) { Text("Retry") }

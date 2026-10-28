@@ -5,8 +5,10 @@ import com.example.test.BuildConfig
 import com.example.test.data.model.Assignment
 import com.example.test.data.model.LearningData
 import com.example.test.data.remote.JsonMapper
+import com.example.test.data.remote.ApiException
 import com.example.test.data.remote.MoodleApi
 import org.json.JSONObject
+import java.io.IOException
 
 class MoodleRepository(context: Context) {
     private val preferences = context.applicationContext
@@ -20,6 +22,9 @@ class MoodleRepository(context: Context) {
 
     val isSignedIn: Boolean
         get() = !preferences.getString(KEY_TOKEN, null).isNullOrBlank()
+
+    var isOffline: Boolean = false
+        private set
 
     suspend fun login(baseUrl: String, username: String, password: String) {
         require(baseUrl.startsWith("http://") || baseUrl.startsWith("https://")) {
@@ -38,8 +43,20 @@ class MoodleRepository(context: Context) {
             .apply()
     }
 
-    suspend fun load(): LearningData =
-        mapper.learningData(api.get("/api/v1/bootstrap"))
+    suspend fun load(): LearningData {
+        return try {
+            val response = api.get("/api/v1/bootstrap")
+            preferences.edit().putString(KEY_BOOTSTRAP_CACHE, response.toString()).apply()
+            isOffline = false
+            mapper.learningData(response)
+        } catch (failure: ApiException) {
+            throw failure
+        } catch (failure: IOException) {
+            val cached = preferences.getString(KEY_BOOTSTRAP_CACHE, null) ?: throw failure
+            isOffline = true
+            mapper.learningData(JSONObject(cached))
+        }
+    }
 
     suspend fun setCompleted(assignmentId: String, completed: Boolean): Assignment {
         val path = "/api/v1/assignments/${encodePathSegment(assignmentId)}/completion"
@@ -48,7 +65,8 @@ class MoodleRepository(context: Context) {
     }
 
     fun logout() {
-        preferences.edit().remove(KEY_TOKEN).apply()
+        isOffline = false
+        preferences.edit().remove(KEY_TOKEN).remove(KEY_BOOTSTRAP_CACHE).apply()
     }
 
     private fun encodePathSegment(value: String): String =
@@ -57,5 +75,6 @@ class MoodleRepository(context: Context) {
     private companion object {
         const val KEY_BASE_URL = "base_url"
         const val KEY_TOKEN = "token"
+        const val KEY_BOOTSTRAP_CACHE = "bootstrap_cache"
     }
 }

@@ -25,6 +25,8 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -61,6 +63,10 @@ private enum class SessionStatus(val label: String) {
 fun TimetableScreen(
     data: LearningData?,
     loading: Boolean,
+    offline: Boolean,
+    error: String?,
+    snackbarHostState: SnackbarHostState,
+    onRetry: () -> Unit,
     onShowClasswork: () -> Unit,
     onLogout: () -> Unit
 ) {
@@ -82,7 +88,9 @@ fun TimetableScreen(
         .filter { session -> isInSemester(selectedDay, data) }
         .sortedBy { it.start }
 
-    Scaffold { padding ->
+    Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) }
+    ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding).padding(16.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -150,12 +158,33 @@ fun TimetableScreen(
             )
             if (loading && data == null) {
                 Text("Loading timetable…")
-            } else if (sessions.isEmpty()) {
+            } else if (data == null) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(error ?: "Timetable could not be loaded.", color = MaterialTheme.colorScheme.error)
+                    Button(onClick = onRetry, enabled = !loading) { Text("Retry") }
+                }
+            } else if (offline) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "Offline · showing saved data",
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Button(onClick = onRetry, enabled = !loading) { Text("Retry") }
+                }
+            } else if (error != null) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(error, color = MaterialTheme.colorScheme.error, modifier = Modifier.weight(1f))
+                    Button(onClick = onRetry, enabled = !loading) { Text("Retry") }
+                }
+            }
+
+            if (data != null && sessions.isEmpty()) {
                 Text(
                     if (isInSemester(selectedDay, data)) "No classes scheduled for this day."
                     else "This date is outside the semester."
                 )
-            } else {
+            } else if (data != null) {
                 LazyColumn(
                     modifier = Modifier.weight(1f),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -163,9 +192,9 @@ fun TimetableScreen(
                     items(sessions, key = { it.id }) { session ->
                         SessionCard(
                             session = session,
-                            courseTitle = data?.courses?.firstOrNull { it.id == session.courseId }?.title
+                            courseTitle = data.courses.firstOrNull { it.id == session.courseId }?.title
                                 ?: session.courseId,
-                            courseTone = data?.courses?.firstOrNull { it.id == session.courseId }?.tone.orEmpty(),
+                            courseTone = data.courses.firstOrNull { it.id == session.courseId }?.tone.orEmpty(),
                             status = sessionStatus(selectedDay, session, now),
                             selected = selectedCourseId == session.courseId,
                             onClick = {
