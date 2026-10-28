@@ -125,6 +125,28 @@ CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id);
 CREATE INDEX IF NOT EXISTS idx_resources_course ON course_resources(course_id);
 `
 
+const TABLES = [
+  "notifications", "course_resources", "announcements", "class_sessions", "submissions", "assignments",
+  "enrollments", "courses", "semesters", "sessions", "users", "meta",
+]
+
+export function isSeeded(db) {
+  return Boolean(db.prepare("SELECT value FROM meta WHERE key = 'seeded_at'").get())
+}
+
+export function seededAt(db) {
+  const row = db.prepare("SELECT value FROM meta WHERE key = 'seeded_at'").get()
+  return row ? Number(row.value) : null
+}
+
+export function resetDatabase(db, now = Date.now()) {
+  transaction(db, () => {
+    for (const table of TABLES) db.exec(`DELETE FROM ${table}`)
+    seed(db, now)
+    db.prepare("INSERT INTO meta (key, value) VALUES ('seeded_at', ?)").run(String(now))
+  })
+}
+
 export function openDatabase(file) {
   if (file !== ":memory:") mkdirSync(dirname(file), { recursive: true })
   const db = new DatabaseSync(file)
