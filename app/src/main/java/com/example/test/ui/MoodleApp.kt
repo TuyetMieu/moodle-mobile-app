@@ -45,6 +45,7 @@ import java.util.Date
 @Composable
 fun MoodleApp(repository: MoodleRepository) {
     var signedIn by rememberSaveable { mutableStateOf(repository.isSignedIn) }
+    var showTimetable by rememberSaveable { mutableStateOf(false) }
     var data by remember { mutableStateOf<LearningData?>(null) }
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -88,18 +89,30 @@ fun MoodleApp(repository: MoodleRepository) {
             error = error
         )
     } else {
-        ClassworkScreen(
-            data = data,
-            loading = loading,
-            error = error,
-            onRetry = ::refresh,
-            onDataChange = { data = it },
-            onLogout = {
-                repository.logout()
-                data = null
-                signedIn = false
-            }
-        )
+        val logout = {
+            repository.logout()
+            data = null
+            signedIn = false
+        }
+        if (showTimetable) {
+            TimetableScreen(
+                data = data,
+                loading = loading,
+                onShowClasswork = { showTimetable = false },
+                onLogout = logout
+            )
+        } else {
+            ClassworkScreen(
+                data = data,
+                loading = loading,
+                error = error,
+                onRetry = ::refresh,
+                onDataChange = { data = it },
+                onShowClasswork = { showTimetable = false },
+                onShowTimetable = { showTimetable = true },
+                onLogout = logout
+            )
+        }
     }
 }
 
@@ -154,6 +167,8 @@ private fun ClassworkScreen(
     error: String?,
     onRetry: () -> Unit,
     onDataChange: (LearningData) -> Unit,
+    onShowClasswork: () -> Unit,
+    onShowTimetable: () -> Unit,
     onLogout: () -> Unit
 ) {
     var filter by rememberSaveable { mutableStateOf(WorkFilter.TODO) }
@@ -190,6 +205,7 @@ private fun ClassworkScreen(
                     Text("Classwork", style = MaterialTheme.typography.headlineSmall)
                     Text(data?.let { "Welcome, ${it.profileName}" } ?: "Loading your courses")
                 }
+                Button(onClick = onShowTimetable) { Text("Timetable") }
                 Button(onClick = onLogout) { Text("Sign out") }
             }
             if (loading && data == null) {
