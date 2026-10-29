@@ -1,12 +1,17 @@
 import {
   authenticate, clearFailedLogins, createSession, deleteSession, lockedForMs, recordFailedLogin, verifyPassword,
 } from "./auth.js"
-import { resetDatabase, seededAt } from "./db.js"
+import { resetDatabase, seededAt, transaction } from "./db.js"
+import { autoGrade } from "./grading.js"
 import {
   HttpError, bootstrap, getAssignment, getCourse, gradeReportCsv, learningSummary, listAssignments,
-  listCourses, listNotifications, markCompleted, markNotificationRead, profileOf, semesterOverview,
-  timetable, unmarkCompleted,
+  listCourses, listNotifications, markAllNotificationsRead, markCompleted, markNotificationRead, profileOf,
+  semesterOverview, timetable, unmarkCompleted,
 } from "./services.js"
+import {
+  autoGradeNow, createAssignment, deleteAssignment, deletePost, getTeachingCourse, postAnnouncement, teacherBootstrap,
+  updateAssignment, updateGrading,
+} from "./teacher.js"
 
 const MAX_BODY_BYTES = 64 * 1024
 
@@ -38,37 +43,37 @@ function makeRoutes(allowReset) {
       },
     },
     {
-      method: "GET", path: "/api/v1/bootstrap", auth: true,
+      method: "GET", path: "/api/v1/bootstrap", auth: true, role: "STUDENT",
       run(ctx) {
         return bootstrap(ctx.db, ctx.user, ctx.now)
       },
     },
     {
-      method: "GET", path: "/api/v1/summary", auth: true,
+      method: "GET", path: "/api/v1/summary", auth: true, role: "STUDENT",
       run(ctx) {
         return learningSummary(ctx.db, ctx.user.id, ctx.now)
       },
     },
     {
-      method: "GET", path: "/api/v1/semester", auth: true,
+      method: "GET", path: "/api/v1/semester", auth: true, role: "STUDENT",
       run(ctx) {
         return semesterOverview(ctx.db, ctx.user, ctx.now)
       },
     },
     {
-      method: "GET", path: "/api/v1/courses", auth: true,
+      method: "GET", path: "/api/v1/courses", auth: true, role: "STUDENT",
       run(ctx) {
         return { items: listCourses(ctx.db, ctx.user.id, ctx.now) }
       },
     },
     {
-      method: "GET", path: "/api/v1/courses/:id", auth: true,
+      method: "GET", path: "/api/v1/courses/:id", auth: true, role: "STUDENT",
       run(ctx) {
         return getCourse(ctx.db, ctx.user.id, ctx.params.id, ctx.now)
       },
     },
     {
-      method: "GET", path: "/api/v1/assignments", auth: true,
+      method: "GET", path: "/api/v1/assignments", auth: true, role: "STUDENT",
       run(ctx) {
         const options = {
           courseId: ctx.query.get("courseId") || undefined,
@@ -78,43 +83,49 @@ function makeRoutes(allowReset) {
       },
     },
     {
-      method: "GET", path: "/api/v1/assignments/:id", auth: true,
+      method: "GET", path: "/api/v1/assignments/:id", auth: true, role: "STUDENT",
       run(ctx) {
         return getAssignment(ctx.db, ctx.user.id, ctx.params.id, ctx.now)
       },
     },
     {
-      method: "POST", path: "/api/v1/assignments/:id/completion", auth: true,
+      method: "POST", path: "/api/v1/assignments/:id/completion", auth: true, role: "STUDENT",
       run(ctx) {
         return markCompleted(ctx.db, ctx.user.id, ctx.params.id, ctx.now)
       },
     },
     {
-      method: "DELETE", path: "/api/v1/assignments/:id/completion", auth: true,
+      method: "DELETE", path: "/api/v1/assignments/:id/completion", auth: true, role: "STUDENT",
       run(ctx) {
         return unmarkCompleted(ctx.db, ctx.user.id, ctx.params.id, ctx.now)
       },
     },
     {
-      method: "GET", path: "/api/v1/timetable", auth: true,
+      method: "GET", path: "/api/v1/timetable", auth: true, role: "STUDENT",
       run(ctx) {
         return timetable(ctx.db, ctx.user.id)
       },
     },
     {
-      method: "GET", path: "/api/v1/notifications", auth: true,
+      method: "GET", path: "/api/v1/notifications", auth: true, role: "STUDENT",
       run(ctx) {
-        return listNotifications(ctx.db, ctx.user.id)
+        return listNotifications(ctx.db, ctx.user)
       },
     },
     {
-      method: "POST", path: "/api/v1/notifications/:id/read", auth: true,
+      method: "POST", path: "/api/v1/notifications/:id/read", auth: true, role: "STUDENT",
       run(ctx) {
-        return markNotificationRead(ctx.db, ctx.user.id, ctx.params.id, ctx.now)
+        return markNotificationRead(ctx.db, ctx.user, ctx.params.id, ctx.now)
       },
     },
     {
-      method: "GET", path: "/api/v1/reports/grades.csv", auth: true,
+      method: "POST", path: "/api/v1/notifications/read-all", auth: true, role: "STUDENT",
+      run(ctx) {
+        return markAllNotificationsRead(ctx.db, ctx.user, ctx.body?.channel ?? null, ctx.now)
+      },
+    },
+    {
+      method: "GET", path: "/api/v1/reports/grades.csv", auth: true, role: "STUDENT",
       run(ctx) {
         const profile = profileOf(ctx.db, ctx.user)
         // VD: "USTH-Semester-1-2026-2027-grade-report.csv" (đổi khoảng trắng và dấu – thành "-")
@@ -130,9 +141,62 @@ function makeRoutes(allowReset) {
         }
       },
     },
+    {
+      method: "GET", path: "/api/v1/teacher/bootstrap", auth: true, role: "TEACHER",
+      run(ctx) {
+        return teacherBootstrap(ctx.db, ctx.user, ctx.now)
+      },
+    },
+    {
+      method: "GET", path: "/api/v1/teacher/courses/:id", auth: true, role: "TEACHER",
+      run(ctx) {
+        return getTeachingCourse(ctx.db, ctx.user, ctx.params.id, ctx.now)
+      },
+    },
+    {
+      method: "PUT", path: "/api/v1/teacher/courses/:id/grading", auth: true, role: "TEACHER",
+      run(ctx) {
+        return updateGrading(ctx.db, ctx.user, ctx.params.id, ctx.body, ctx.now)
+      },
+    },
+    {
+      method: "POST", path: "/api/v1/teacher/courses/:id/assignments", auth: true, role: "TEACHER",
+      run(ctx) {
+        return createAssignment(ctx.db, ctx.user, ctx.params.id, ctx.body, ctx.now)
+      },
+    },
+    {
+      method: "PUT", path: "/api/v1/teacher/assignments/:id", auth: true, role: "TEACHER",
+      run(ctx) {
+        return updateAssignment(ctx.db, ctx.user, ctx.params.id, ctx.body, ctx.now)
+      },
+    },
+    {
+      method: "DELETE", path: "/api/v1/teacher/assignments/:id", auth: true, role: "TEACHER",
+      run(ctx) {
+        return deleteAssignment(ctx.db, ctx.user, ctx.params.id, ctx.now)
+      },
+    },
+    {
+      method: "POST", path: "/api/v1/teacher/assignments/:id/auto-grade", auth: true, role: "TEACHER",
+      run(ctx) {
+        return autoGradeNow(ctx.db, ctx.user, ctx.params.id, ctx.now)
+      },
+    },
+    {
+      method: "POST", path: "/api/v1/teacher/announcements", auth: true, role: "TEACHER",
+      run(ctx) {
+        return postAnnouncement(ctx.db, ctx.user, ctx.body, ctx.now)
+      },
+    },
+    {
+      method: "DELETE", path: "/api/v1/teacher/announcements/:id", auth: true, role: "TEACHER",
+      run(ctx) {
+        return deletePost(ctx.db, ctx.user, ctx.params.id, ctx.now)
+      },
+    },
   ]
 
-  
   if (allowReset) {
     routes.push({
       method: "POST", path: "/api/v1/dev/reset", auth: false,
@@ -153,7 +217,6 @@ function login(ctx) {
     throw new HttpError(400, "missing_credentials", "Vui lòng nhập mã sinh viên và mật khẩu")
   }
 
-  
   const waitMs = lockedForMs(ctx.failedLogins, username, ctx.now)
   if (waitMs > 0) {
     const minutes = Math.ceil(waitMs / 60000)
@@ -203,7 +266,7 @@ function send(res, status, body, extraHeaders) {
     "Content-Type": isText ? "text/plain; charset=utf-8" : "application/json; charset=utf-8",
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Headers": "Authorization, Content-Type",
-    "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
     "Cache-Control": "no-store",
   }
   if (extraHeaders) {
@@ -245,7 +308,7 @@ export function createApp(db, options = {}) {
   const clock = options.clock || Date.now
   const log = options.log || function () {}
   const routes = makeRoutes(options.allowReset === true)
-  const failedLogins = new Map() 
+  const failedLogins = new Map()
 
   return async function handle(req, res) {
     const startedAt = Date.now()
@@ -280,13 +343,19 @@ export function createApp(db, options = {}) {
       if (route.auth) {
         user = authenticate(db, req.headers.authorization, now)
         if (!user) throw new HttpError(401, "unauthorized", "Phiên đăng nhập không hợp lệ hoặc đã hết hạn")
+        if (route.role && user.role !== route.role) {
+          throw new HttpError(403, "forbidden", "Tài khoản của bạn không dùng được chức năng này")
+        }
       }
 
       for (const name in params) params[name] = decodeParam(params[name])
       let body = null
-      if (req.method === "POST") body = await readJson(req)
+      if (req.method === "POST" || req.method === "PUT") body = await readJson(req)
 
-      const result = await route.run({ db, user, params, query: url.searchParams, body, now, failedLogins })
+      const result = transaction(db, () => {
+        if (user) autoGrade(db, now)
+        return route.run({ db, user, params, query: url.searchParams, body, now, failedLogins })
+      })
 
       if (result && typeof result.status === "number" && result.headers && "body" in result) {
         status = result.status

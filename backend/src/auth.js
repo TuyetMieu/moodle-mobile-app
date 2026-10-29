@@ -1,8 +1,6 @@
 import { randomBytes, scryptSync, timingSafeEqual } from "node:crypto"
 
 const TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000
-const MAX_FAILED_LOGINS = 5
-const LOCK_WINDOW_MS = 15 * 60 * 1000
 
 export function hashPassword(password) {
   const salt = randomBytes(16).toString("hex")
@@ -31,11 +29,14 @@ export function deleteSession(db, token) {
   db.prepare("DELETE FROM sessions WHERE token = ?").run(token)
 }
 
+const MAX_FAILED_LOGINS = 5
+const LOCK_WINDOW_MS = 15 * 60 * 1000
+
 export function lockedForMs(failedLogins, username, now) {
   const entry = failedLogins.get(username)
   if (!entry) return 0
   if (now - entry.firstAt >= LOCK_WINDOW_MS) {
-    failedLogins.delete(username) 
+    failedLogins.delete(username)
     return 0
   }
   if (entry.count < MAX_FAILED_LOGINS) return 0
